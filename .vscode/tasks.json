@@ -1,0 +1,32 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "npm: compile",
+      "type": "npm",
+      "script": "compile",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "detail": "Compile TypeScript to JavaScript",
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "npm: watch",
+      "type": "npm",
+      "script": "watch",
+      "isBackground": true,
+      "group": "build",
+      "detail": "Watch TypeScript files and recompile on change",
+      "problemMatcher": ["$tsc-watch"]
+    },
+    {
+      "label": "npm: package",
+      "type": "npm",
+      "script": "package",
+      "group": "build",
+      "detail": "Package the extension to a .vsix file"
+    }
+  ]
+}

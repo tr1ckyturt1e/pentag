@@ -1,0 +1,1 @@
+{"version":3,"file":"chatParticipant.d.ts","sourceRoot":"","sources":["../src/chatParticipant.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,MAAM,MAAM,QAAQ,CAAC;AACjC,OAAO,EAAE,cAAc,EAAE,MAAM,kBAAkB,CAAC;AAIlD,qBAAa,sBAAsB;IAE/B,OAAO,CAAC,QAAQ,CAAC,OAAO;IACxB,OAAO,CAAC,QAAQ,CAAC,cAAc;gBADd,OAAO,EAAE,MAAM,CAAC,gBAAgB,EAChC,cAAc,EAAE,cAAc;IAGjD,QAAQ,IAAI,IAAI;YAqBF,cAAc;CAgF7B"}

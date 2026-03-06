@@ -1,0 +1,1 @@
+{"version":3,"file":"sessionManager.js","sourceRoot":"","sources":["../src/sessionManager.ts"],"names":[],"mappings":";;;AAEA,MAAa,cAAc;IAGI;IAFZ,WAAW,GAAG,gBAAgB,CAAC;IAEhD,YAA6B,OAAgC;QAAhC,YAAO,GAAP,OAAO,CAAyB;IAAG,CAAC;IAEjE,YAAY;QACV,IAAI,CAAC,OAAO,CAAC,cAAc,CAAC,MAAM,CAAC,IAAI,CAAC,WAAW,EAAE,SAAS,CAAC,CAAC;IAClE,CAAC;CACF;AARD,wCAQC"}

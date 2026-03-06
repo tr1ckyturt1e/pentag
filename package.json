@@ -1,0 +1,179 @@
+{
+  "name": "axis-bot",
+  "displayName": "AXIS Bot - AI Assisted Pentest",
+  "description": "AI-powered penetration testing assistant integrated with GitHub Copilot Chat",
+  "version": "0.1.0",
+  "publisher": "pentag",
+  "icon": "media/icon.png",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "extensionDependencies": [
+    "github.copilot-chat"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "pentag.axis",
+        "fullName": "AXIS Bot",
+        "name": "axis",
+        "description": "Your AI-powered penetration testing assistant. Ask me to recon, scan, or analyze targets.",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "recon",
+            "description": "Perform reconnaissance on a target (OSINT, subdomain enum, DNS, WHOIS)"
+          },
+          {
+            "name": "scan",
+            "description": "Run a port or vulnerability scan against a target"
+          },
+          {
+            "name": "exploit",
+            "description": "Analyze and suggest exploits for discovered vulnerabilities"
+          },
+          {
+            "name": "report",
+            "description": "Generate a penetration testing report from session findings"
+          },
+          {
+            "name": "explain",
+            "description": "Explain a CVE, vulnerability, or attack technique in detail"
+          },
+          {
+            "name": "payload",
+            "description": "Generate or analyze a payload for a given vulnerability type"
+          },
+          {
+            "name": "checklist",
+            "description": "Get a penetration testing checklist for a specific target type"
+          },
+          {
+            "name": "clear",
+            "description": "Clear the current session and findings"
+          }
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "pentag.clearSession",
+        "title": "Clear Session",
+        "category": "AXIS Bot",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "pentag.openCopilotChat",
+        "title": "Open in Copilot Chat",
+        "category": "AXIS Bot",
+        "icon": "$(comment-discussion)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "pentag-sidebar",
+          "title": "AXIS Bot",
+          "icon": "media/shield-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "pentag-sidebar": [
+        {
+          "type": "webview",
+          "id": "pentag.newProjectView",
+          "name": "New Project",
+          "contextualTitle": "Create New Project"
+        },
+        {
+          "type": "webview",
+          "id": "pentag.openProjectView",
+          "name": "My Projects",
+          "contextualTitle": "My Projects"
+        },
+        {
+          "type": "webview",
+          "id": "pentag.settingsView",
+          "name": "Settings",
+          "contextualTitle": "AXIS Bot Settings"
+        }
+      ]
+    },
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "pentag.clearSession"
+        },
+        {
+          "command": "pentag.openCopilotChat"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AXIS Bot",
+      "properties": {
+        "pentag.defaultModel": {
+          "type": "string",
+          "default": "gpt-4o",
+          "description": "Default AI model to use for the Pentester Agent (uses GitHub Copilot models)",
+          "enum": [
+            "gpt-4o",
+            "gpt-4o-mini",
+            "claude-3-5-sonnet",
+            "gemini-1.5-pro",
+            "o1-preview",
+            "o3-mini"
+          ]
+        },
+        "pentag.sessionAutoSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically save session findings to workspace"
+        },
+        "pentag.reportTemplate": {
+          "type": "string",
+          "default": "standard",
+          "enum": [
+            "standard",
+            "executive",
+            "technical",
+            "owasp"
+          ],
+          "description": "Default report template to use when generating reports"
+        },
+        "pentag.burpProxy": {
+          "type": "string",
+          "default": "127.0.0.1:8080",
+          "description": "Burp Suite proxy address (host:port)"
+        },
+        "pentag.burpApiKey": {
+          "type": "string",
+          "default": "None",
+          "description": "Burp Suite REST API key"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "@vscode/vsce": "^3.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {}
+}
