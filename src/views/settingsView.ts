@@ -37,6 +37,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
                 workspacePath: string;
                 burpProxy: string;
                 burpApiKey: string;
+                burpServerUrl: string;
               },
             );
             break;
@@ -80,6 +81,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     workspacePath: string;
     burpProxy: string;
     burpApiKey: string;
+    burpServerUrl: string;
   }): void {
     const trimmed = payload.workspacePath?.trim() ?? "";
 
@@ -108,6 +110,11 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       payload.burpApiKey?.trim() || "None",
       vscode.ConfigurationTarget.Global,
     );
+    config.update(
+      "burpServerUrl",
+      payload.burpServerUrl?.trim() || "127.0.0.1:1337",
+      vscode.ConfigurationTarget.Global,
+    );
 
     this._view?.webview.postMessage({ command: "saved", path: trimmed });
     this._onWorkspacePathChanged?.(trimmed);
@@ -131,6 +138,8 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     const config = vscode.workspace.getConfiguration("pentag");
     const savedBurpProxy = config.get<string>("burpProxy") ?? "127.0.0.1:8080";
     const savedBurpApiKey = config.get<string>("burpApiKey") ?? "None";
+    const savedBurpServerUrl =
+      config.get<string>("burpServerUrl") ?? "127.0.0.1:1337";
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -294,6 +303,13 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   </div>
 
   <div class="field">
+    <div class="field-label">Server URL</div>
+    <div class="path-row">
+      <input type="text" id="burpServerUrl" placeholder="127.0.0.1:1337" value="${savedBurpServerUrl}">
+    </div>
+  </div>
+
+  <div class="field">
     <div class="field-label">API Key</div>
     <div class="path-row">
       <input type="text" id="burpApiKey" placeholder="None" value="${savedBurpApiKey}">
@@ -316,6 +332,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     vscode.postMessage({ command: 'saveSettings', payload: {
       workspacePath: document.getElementById('workspacePath').value.trim(),
       burpProxy: document.getElementById('burpProxy').value.trim(),
+      burpServerUrl: document.getElementById('burpServerUrl').value.trim(),
       burpApiKey: document.getElementById('burpApiKey').value.trim()
     }});
   });

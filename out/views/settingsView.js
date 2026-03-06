@@ -101,6 +101,7 @@ class SettingsViewProvider {
         this._context.globalState.update("pentag.workspacePath", trimmed);
         config.update("burpProxy", payload.burpProxy?.trim() || "127.0.0.1:8080", vscode.ConfigurationTarget.Global);
         config.update("burpApiKey", payload.burpApiKey?.trim() || "None", vscode.ConfigurationTarget.Global);
+        config.update("burpServerUrl", payload.burpServerUrl?.trim() || "127.0.0.1:1337", vscode.ConfigurationTarget.Global);
         this._view?.webview.postMessage({ command: "saved", path: trimmed });
         this._onWorkspacePathChanged?.(trimmed);
         vscode.window.showInformationMessage(`✅ Settings saved.`);
@@ -119,6 +120,7 @@ class SettingsViewProvider {
         const config = vscode.workspace.getConfiguration("pentag");
         const savedBurpProxy = config.get("burpProxy") ?? "127.0.0.1:8080";
         const savedBurpApiKey = config.get("burpApiKey") ?? "None";
+        const savedBurpServerUrl = config.get("burpServerUrl") ?? "127.0.0.1:1337";
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -281,6 +283,13 @@ class SettingsViewProvider {
   </div>
 
   <div class="field">
+    <div class="field-label">Server URL</div>
+    <div class="path-row">
+      <input type="text" id="burpServerUrl" placeholder="127.0.0.1:1337" value="${savedBurpServerUrl}">
+    </div>
+  </div>
+
+  <div class="field">
     <div class="field-label">API Key</div>
     <div class="path-row">
       <input type="text" id="burpApiKey" placeholder="None" value="${savedBurpApiKey}">
@@ -303,6 +312,7 @@ class SettingsViewProvider {
     vscode.postMessage({ command: 'saveSettings', payload: {
       workspacePath: document.getElementById('workspacePath').value.trim(),
       burpProxy: document.getElementById('burpProxy').value.trim(),
+      burpServerUrl: document.getElementById('burpServerUrl').value.trim(),
       burpApiKey: document.getElementById('burpApiKey').value.trim()
     }});
   });
