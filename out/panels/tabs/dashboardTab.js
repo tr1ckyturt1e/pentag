@@ -231,6 +231,156 @@ function getCss() {
   }
   .save-msg.visible { opacity: 1; }
 
+  /* ── Agent status panel ───────────────────────────────────────────────── */
+  .agent-status-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin-top: 4px;
+  }
+
+  /* Top-level orchestrator row */
+  .agent-status-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-radius: 5px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.1));
+    transition: background 0.2s;
+  }
+  .agent-status-row.orchestrator-row {
+    background: rgba(79,195,247,0.05);
+    border-color: rgba(79,195,247,0.18);
+  }
+
+  /* Sub-agents block — indented tree below the orchestrator */
+  .subagents-block {
+    display: flex;
+    flex-direction: column;
+    margin-left: 18px;          /* indent from orchestrator */
+    padding-left: 12px;         /* room for the tree line */
+    border-left: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.12));
+    margin-top: 4px;
+    margin-bottom: 4px;
+    gap: 4px;
+  }
+  .subagent-row-wrap {
+    display: flex;
+    align-items: stretch;
+  }
+  /* horizontal connector ── before each sub-agent */
+  .subagent-row-wrap::before {
+    content: '';
+    display: block;
+    width: 12px;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.12));
+    margin-bottom: auto;
+    margin-top: 16px; /* vertically centers on the row */
+  }
+  .agent-status-row.subagent-row {
+    flex: 1;
+    padding: 6px 10px;
+    background: rgba(255,255,255,0.02);
+    border-color: rgba(255,255,255,0.06);
+    border-radius: 4px;
+  }
+  .agent-status-row.subagent-row .agent-status-name {
+    font-size: 11px;
+    opacity: 0.9;
+  }
+
+  /* Dots */
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--vscode-foreground);
+    opacity: 0.2;
+    transition: background 0.3s, opacity 0.3s;
+  }
+  .status-dot[data-status='running'],
+  .status-dot[data-status='waiting'] {
+    opacity: 1;
+    animation: pulse-dot 1.4s ease-in-out infinite;
+  }
+  .status-dot[data-status='running']  { background: #4fc3f7; }
+  .status-dot[data-status='waiting']  { background: #ffb74d; }
+  .status-dot[data-status='done']     { background: #66bb6a; opacity: 1; }
+  .status-dot[data-status='failed']   { background: #ef5350; opacity: 1; }
+  .status-dot[data-status='cancelled']{ background: #9e9e9e; opacity: 0.6; }
+  @keyframes pulse-dot {
+    0%, 100% { transform: scale(1);   opacity: 1; }
+    50%       { transform: scale(1.5); opacity: 0.6; }
+  }
+  .agent-status-name {
+    flex: 1;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .status-badge {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.07);
+    color: var(--vscode-foreground);
+    opacity: 0.55;
+    transition: background 0.3s, color 0.3s, opacity 0.3s;
+    white-space: nowrap;
+  }
+  .status-badge[data-status='running']  { background: rgba(79,195,247,0.15);  color: #4fc3f7; opacity: 1; }
+  .status-badge[data-status='waiting']  { background: rgba(255,183,77,0.15);  color: #ffb74d; opacity: 1; }
+  .status-badge[data-status='done']     { background: rgba(102,187,106,0.15); color: #66bb6a; opacity: 1; }
+  .status-badge[data-status='failed']   { background: rgba(239,83,80,0.15);   color: #ef5350; opacity: 1; }
+  .status-badge[data-status='cancelled']{ background: rgba(158,158,158,0.1);  color: #9e9e9e; opacity: 0.8; }
+  .status-scan-idle {
+    font-size: 11px;
+    opacity: 0.35;
+    font-style: italic;
+    padding: 6px 2px;
+  }
+  /* Orchestrator icon label */
+  .orchestrator-icon {
+    font-size: 11px;
+    opacity: 0.4;
+    margin-right: 2px;
+  }
+
+  /* Independent-agent divider between orchestrator block and peer agents */
+  .agent-divider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 10px 0 6px;
+    opacity: 0.35;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+  }
+  .agent-divider::before,
+  .agent-divider::after {
+    content: '';
+    flex: 1;
+    border-top: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.1));
+  }
+
+  /* Burp Agent — independent peer, orange accent */
+  .agent-status-row.burp-row {
+    background: rgba(255,152,0,0.05);
+    border-color: rgba(255,152,0,0.2);
+  }
+  .burp-icon {
+    font-size: 11px;
+    opacity: 0.45;
+    margin-right: 2px;
+  }
+
   `;
 }
 // ---------------------------------------------------------------------------
@@ -280,7 +430,67 @@ function getHtml() {
   <!-- Right: Status section -->
   <div class="panel-right">
     <div class="panel-header">Status</div>
-    <div id="statusContent"></div>
+    <div id="statusContent">
+      <div class="status-scan-idle">No scan running.</div>
+      <div class="agent-status-list" id="agentStatusList" style="display:none">
+
+        <!-- ── Orchestrator (top-level) ──────────────────────────────── -->
+        <div class="agent-status-row orchestrator-row" id="status-orchestrator">
+          <span class="status-dot" data-status="not-started"></span>
+          <span class="agent-status-name">
+            <span class="orchestrator-icon">&#9670;</span> Orchestrator
+          </span>
+          <span class="status-badge" data-status="not-started">Not Started</span>
+        </div>
+
+        <!-- ── Specialist sub-agents (nested under orchestrator) ─────── -->
+        <div class="subagents-block" id="subagentsBlock">
+
+          <div class="subagent-row-wrap">
+            <div class="agent-status-row subagent-row" id="status-recon-agent">
+              <span class="status-dot" data-status="not-started"></span>
+              <span class="agent-status-name">Recon Agent</span>
+              <span class="status-badge" data-status="not-started">Not Started</span>
+            </div>
+          </div>
+
+          <div class="subagent-row-wrap">
+            <div class="agent-status-row subagent-row" id="status-auth-agent">
+              <span class="status-dot" data-status="not-started"></span>
+              <span class="agent-status-name">Auth Agent</span>
+              <span class="status-badge" data-status="not-started">Not Started</span>
+            </div>
+          </div>
+
+          <div class="subagent-row-wrap">
+            <div class="agent-status-row subagent-row" id="status-exploit-agent">
+              <span class="status-dot" data-status="not-started"></span>
+              <span class="agent-status-name">Exploit Agent</span>
+              <span class="status-badge" data-status="not-started">Not Started</span>
+            </div>
+          </div>
+
+          <div class="subagent-row-wrap">
+            <div class="agent-status-row subagent-row" id="status-reporting-agent">
+              <span class="status-dot" data-status="not-started"></span>
+              <span class="agent-status-name">Reporting Agent</span>
+              <span class="status-badge" data-status="not-started">Not Started</span>
+            </div>
+          </div>
+
+        </div><!-- /subagentsBlock -->
+
+        <!-- Burp Agent (independent peer to Orchestrator) -->
+        <div class="agent-status-row burp-row" id="status-burp-agent">
+          <span class="status-dot" data-status="not-started"></span>
+          <span class="agent-status-name">
+            <span class="burp-icon">&#9632;</span> Burp Agent
+          </span>
+          <span class="status-badge" data-status="not-started">Not Started</span>
+        </div>
+
+      </div><!-- /agentStatusList -->
+    </div>
   </div>
 
 </div>
@@ -447,7 +657,39 @@ function getScript() {
       if (d.command === 'collectionSelected') {
         document.getElementById('fCollectionFile').value = d.path;
       }
+      if (d.command === 'agentStatus') {
+        updateAgentStatus(d.agentId, d.status);
+      }
+      if (d.command === 'scanStarted') {
+        document.querySelector('.status-scan-idle').style.display = 'none';
+        document.getElementById('agentStatusList').style.display = 'flex';
+        // Reset all agents to not-started
+        document.querySelectorAll('.agent-status-row').forEach(function(row) {
+          updateAgentStatus(row.id.replace('status-', ''), 'not-started');
+        });
+      }
+      if (d.command === 'scanEnded') {
+        /* leave statuses as-is so user can see final state */
+      }
     });
+
+    function updateAgentStatus(agentId, status) {
+      var row = document.getElementById('status-' + agentId);
+      if (!row) { return; }
+      var dot   = row.querySelector('.status-dot');
+      var badge = row.querySelector('.status-badge');
+      dot.dataset.status   = status;
+      badge.dataset.status = status;
+      var labels = {
+        'not-started': 'Not Started',
+        'running':     'Running',
+        'done':        'Complete',
+        'failed':      'Failed',
+        'cancelled':   'Cancelled',
+        'waiting':     'Waiting for Input'
+      };
+      badge.textContent = labels[status] || status;
+    }
 
   })(); // end initDashboard
   `;

@@ -114,6 +114,7 @@
         }
       ]
     },
+    "languageModelTools": [],
     "configuration": {
       "title": "AXIS Bot",
       "properties": {

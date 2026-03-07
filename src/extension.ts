@@ -6,6 +6,7 @@ import { SessionManager } from "./sessionManager";
 import { NewProjectViewProvider } from "./views/newProjectView";
 import { SettingsViewProvider } from "./views/settingsView";
 import { OpenProjectViewProvider } from "./views/openProjectView";
+import { registerTools } from "./tools";
 
 /** Ensures the `agents` subfolder exists inside the configured workspace. */
 function ensureAgentsFolder(workspacePath: string | undefined): void {
@@ -21,6 +22,9 @@ function ensureAgentsFolder(workspacePath: string | undefined): void {
 
 export function activate(context: vscode.ExtensionContext) {
   console.log("[AXIS Bot] Extension activating...");
+
+  // Register any built-in LM tools
+  registerTools(context);
 
   // Ensure agents folder exists in the currently saved workspace (if any)
   const savedWorkspace = context.globalState.get<string>(

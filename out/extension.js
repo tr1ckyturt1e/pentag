@@ -43,6 +43,7 @@ const sessionManager_1 = require("./sessionManager");
 const newProjectView_1 = require("./views/newProjectView");
 const settingsView_1 = require("./views/settingsView");
 const openProjectView_1 = require("./views/openProjectView");
+const tools_1 = require("./tools");
 /** Ensures the `agents` subfolder exists inside the configured workspace. */
 function ensureAgentsFolder(workspacePath) {
     if (!workspacePath || !fs.existsSync(workspacePath)) {
@@ -56,6 +57,8 @@ function ensureAgentsFolder(workspacePath) {
 }
 function activate(context) {
     console.log("[AXIS Bot] Extension activating...");
+    // Register any built-in LM tools
+    (0, tools_1.registerTools)(context);
     // Ensure agents folder exists in the currently saved workspace (if any)
     const savedWorkspace = context.globalState.get("pentag.workspacePath");
     ensureAgentsFolder(savedWorkspace);

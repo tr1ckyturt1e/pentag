@@ -35,8 +35,13 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ProjectPanel = void 0;
 const vscode = __importStar(require("vscode"));
+const path = __importStar(require("path"));
 const dashboardTab = __importStar(require("./tabs/dashboardTab"));
 const scannerTab = __importStar(require("./tabs/scannerTab"));
+const orchestrator_1 = require("../runtime/orchestrator");
+const agentLoader_1 = require("../runtime/agentLoader");
+const modelService_1 = require("../runtime/modelService");
+const memoryStore_1 = require("../runtime/memoryStore");
 // ---------------------------------------------------------------------------
 // ProjectPanel — full-editor webview that opens per project
 // ---------------------------------------------------------------------------
@@ -44,6 +49,16 @@ class ProjectPanel {
     static _open = new Map();
     _panel;
     _config;
+    // -- Scanner state -------------------------------------------------------
+    _cts;
+    _hitlResolve;
+    _hitlReject;
+    _isPaused = false;
+    _pauseResolve;
+    _projectPath;
+    _agentLoader;
+    _modelService;
+    _memoryStore;
     //  Factory
     static open(context, config, projectPath) {
         const existing = ProjectPanel._open.get(projectPath);
@@ -56,20 +71,182 @@ class ProjectPanel {
     //  Constructor
     constructor(context, config, projectPath) {
         this._config = config;
+        this._projectPath = projectPath;
+        // Resolve the agents directory (relative to the extension root)
+        const agentsDir = path.join(context.extensionPath, "src", "agents");
+        this._agentLoader = new agentLoader_1.AgentLoader(agentsDir);
+        this._modelService = new modelService_1.ModelService();
+        this._memoryStore = new memoryStore_1.MemoryStore();
+        // Scanner event handlers passed to scannerTab.handleMessage
+        const handlers = {
+            onRunScanner: (modelId, mcpServers) => {
+                void this._startScan(modelId, mcpServers);
+            },
+            onPauseScanner: () => {
+                if (!this._isPaused && this._cts) {
+                    this._isPaused = true;
+                    try {
+                        this._panel.webview.postMessage({ command: "scanPaused" });
+                    }
+                    catch {
+                        /* panel may be disposed */
+                    }
+                }
+            },
+            onResumeScanner: () => {
+                if (this._isPaused) {
+                    this._isPaused = false;
+                    this._pauseResolve?.();
+                    this._pauseResolve = undefined;
+                    try {
+                        this._panel.webview.postMessage({ command: "scanResumed" });
+                    }
+                    catch {
+                        /* panel may be disposed */
+                    }
+                }
+            },
+            onCancelScanner: () => {
+                // Unblock pause gate so the cancellation check fires immediately
+                this._isPaused = false;
+                this._pauseResolve?.();
+                this._pauseResolve = undefined;
+                // Reject any pending HITL promise so the orchestrator isn't deadlocked
+                this._hitlReject?.(new Error("Cancelled"));
+                this._hitlReject = undefined;
+                this._hitlResolve = undefined;
+                this._cts?.cancel();
+            },
+            onHitlResponse: (text) => {
+                if (this._hitlResolve) {
+                    this._hitlResolve(text);
+                    this._hitlResolve = undefined;
+                }
+            },
+        };
         this._panel = vscode.window.createWebviewPanel("pentag.projectView", config.name, vscode.ViewColumn.One, { enableScripts: true, retainContextWhenHidden: true });
         ProjectPanel._open.set(projectPath, this);
         this._panel.webview.html = this._getHtml();
         this._panel.webview.onDidReceiveMessage(async (msg) => {
             if (msg.command === "webviewReady") {
                 await this._pushModels();
+                await this._pushTools();
                 return;
             }
             await dashboardTab.handleMessage(msg, this._panel, this._config, projectPath, (updated) => {
                 this._config = updated;
             });
-            await scannerTab.handleMessage(msg, this._panel, this._config);
+            scannerTab.handleMessage(msg, this._panel, this._config, handlers);
         }, undefined, context.subscriptions);
-        this._panel.onDidDispose(() => ProjectPanel._open.delete(projectPath), null, context.subscriptions);
+        this._panel.onDidDispose(() => {
+            this._isPaused = false;
+            this._pauseResolve?.();
+            this._pauseResolve = undefined;
+            this._hitlReject?.(new Error("Cancelled"));
+            this._hitlReject = undefined;
+            this._hitlResolve = undefined;
+            this._cts?.cancel();
+            this._cts = undefined;
+            ProjectPanel._open.delete(projectPath);
+        }, null, context.subscriptions);
+    }
+    //  Start the AI scanner
+    async _startScan(modelId, mcpServers) {
+        if (this._cts) {
+            vscode.window.showWarningMessage("A scan is already in progress.");
+            return;
+        }
+        this._cts = new vscode.CancellationTokenSource();
+        this._panel.webview.postMessage({ command: "scanStarted" });
+        const context = {
+            projectConfig: this._config,
+            modelId,
+            conversationHistory: this._memoryStore.get(this._projectPath),
+            findings: [],
+            cancellationToken: this._cts.token,
+            selectedMcpServers: mcpServers,
+            onStatus: (agentId, status) => {
+                try {
+                    this._panel.webview.postMessage({
+                        command: "agentStatus",
+                        agentId,
+                        status,
+                    });
+                }
+                catch {
+                    /* panel may be disposed */
+                }
+            },
+            onHitlQuestion: (agentId, question) => {
+                try {
+                    this._panel.webview.postMessage({
+                        command: "hitlQuestion",
+                        agentId,
+                        text: question,
+                    });
+                }
+                catch {
+                    /* panel may be disposed */
+                }
+                return new Promise((resolve, reject) => {
+                    this._hitlResolve = resolve;
+                    this._hitlReject = reject;
+                });
+            },
+            onVuln: (vuln) => {
+                const command = vuln.type === "confirmed" ? "confirmedVuln" : "tentativeVuln";
+                try {
+                    this._panel.webview.postMessage({ command, vuln });
+                }
+                catch {
+                    /* panel may be disposed */
+                }
+            },
+            waitIfPaused: () => {
+                if (!this._isPaused) {
+                    return Promise.resolve();
+                }
+                return new Promise((resolve) => {
+                    this._pauseResolve = resolve;
+                });
+            },
+        };
+        const orchestrator = new orchestrator_1.Orchestrator(this._agentLoader, this._modelService, this._memoryStore);
+        const intent = `Run a full penetration test on ${this._config.apps[0]?.url ?? "the configured target"}. ` +
+            `Project: ${this._config.name}.`;
+        try {
+            await orchestrator.run(intent, context, this._projectPath, (chunk, agentId) => {
+                try {
+                    this._panel.webview.postMessage({
+                        command: "scannerChunk",
+                        agentId,
+                        text: chunk,
+                    });
+                }
+                catch {
+                    /* panel may be disposed */
+                }
+            });
+        }
+        catch (err) {
+            if (!(err instanceof vscode.CancellationError)) {
+                vscode.window.showErrorMessage(`Scan failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
+        }
+        finally {
+            this._cts.dispose();
+            this._cts = undefined;
+            this._hitlResolve = undefined;
+            this._hitlReject = undefined;
+            this._isPaused = false;
+            this._pauseResolve = undefined;
+            try {
+                this._panel.webview.postMessage({ command: "scanEnded" });
+            }
+            catch {
+                /* panel may be disposed */
+            }
+        }
     }
     //  Push models to webview
     async _pushModels() {
@@ -82,6 +259,31 @@ class ProjectPanel {
         }
         catch {
             this._panel.webview.postMessage({ command: "modelList", models: [] });
+        }
+    }
+    //  Push MCP server names derived from registered LM tools to webview.
+    //  MCP tools follow the naming convention: mcp_<serverName>_<toolName>.
+    //  We deduplicate by server name and send only the server list.
+    async _pushTools() {
+        try {
+            const serverNames = [
+                ...new Set(vscode.lm.tools
+                    .map((t) => {
+                    const m = t.name.match(/^mcp_([^_]+)_/);
+                    return m ? m[1] : null;
+                })
+                    .filter((s) => s !== null)),
+            ];
+            this._panel.webview.postMessage({
+                command: "mcpServerList",
+                servers: serverNames,
+            });
+        }
+        catch {
+            this._panel.webview.postMessage({
+                command: "mcpServerList",
+                servers: [],
+            });
         }
     }
     //  Build HTML
