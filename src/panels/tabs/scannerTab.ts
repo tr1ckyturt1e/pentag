@@ -1,5 +1,7 @@
 ﻿import * as vscode from "vscode";
 import { ProjectConfig } from "../../views/newProjectView";
+import * as scannerLeft from "./scanner/scannerLeft";
+import * as scannerRight from "./scanner/scannerRight";
 
 // ---------------------------------------------------------------------------
 // CSS
@@ -7,12 +9,16 @@ import { ProjectConfig } from "../../views/newProjectView";
 export function getCss(): string {
   return /* css */ `
   .scanner-layout {
+    display: flex;
+    flex-direction: column;
     flex: 1;
     min-height: 0;
-    overflow-y: auto;
-    padding: 20px 24px;
+    overflow: hidden;
   }
   .scanner-toolbar {
+    flex-shrink: 0;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.1));
     display: flex;
     align-items: center;
     gap: 12px;
@@ -49,6 +55,16 @@ export function getCss(): string {
   .btn-run-scanner:hover { background: var(--vscode-button-hoverBackground); }
   .btn-run-scanner:disabled { opacity: 0.45; cursor: not-allowed; }
   .btn-run-scanner svg { flex-shrink: 0; }
+
+  /* ── Scanner body (left + right) ──────────────────────────────────────── */
+  .scanner-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+  ${scannerLeft.getCss()}
+  ${scannerRight.getCss()}
   `;
 }
 
@@ -70,6 +86,11 @@ export function getHtml(): string {
     <select id="modelSelect" class="model-select">
       <option value="">Loading models\u2026</option>
     </select>
+  </div>
+
+  <div class="scanner-body">
+    ${scannerLeft.getHtml()}
+    ${scannerRight.getHtml()}
   </div>
 </div>
   `;
@@ -115,6 +136,8 @@ export function getScript(): string {
     });
 
   })(); /* end initScanner */
+  ${scannerLeft.getScript()}
+  ${scannerRight.getScript()}
   `;
 }
 

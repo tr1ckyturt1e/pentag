@@ -38,18 +38,24 @@ exports.getHtml = getHtml;
 exports.getScript = getScript;
 exports.handleMessage = handleMessage;
 const vscode = __importStar(require("vscode"));
+const scannerLeft = __importStar(require("./scanner/scannerLeft"));
+const scannerRight = __importStar(require("./scanner/scannerRight"));
 // ---------------------------------------------------------------------------
 // CSS
 // ---------------------------------------------------------------------------
 function getCss() {
     return /* css */ `
   .scanner-layout {
+    display: flex;
+    flex-direction: column;
     flex: 1;
     min-height: 0;
-    overflow-y: auto;
-    padding: 20px 24px;
+    overflow: hidden;
   }
   .scanner-toolbar {
+    flex-shrink: 0;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.1));
     display: flex;
     align-items: center;
     gap: 12px;
@@ -86,6 +92,16 @@ function getCss() {
   .btn-run-scanner:hover { background: var(--vscode-button-hoverBackground); }
   .btn-run-scanner:disabled { opacity: 0.45; cursor: not-allowed; }
   .btn-run-scanner svg { flex-shrink: 0; }
+
+  /* ── Scanner body (left + right) ──────────────────────────────────────── */
+  .scanner-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+  ${scannerLeft.getCss()}
+  ${scannerRight.getCss()}
   `;
 }
 // ---------------------------------------------------------------------------
@@ -106,6 +122,11 @@ function getHtml() {
     <select id="modelSelect" class="model-select">
       <option value="">Loading models\u2026</option>
     </select>
+  </div>
+
+  <div class="scanner-body">
+    ${scannerLeft.getHtml()}
+    ${scannerRight.getHtml()}
   </div>
 </div>
   `;
@@ -150,6 +171,8 @@ function getScript() {
     });
 
   })(); /* end initScanner */
+  ${scannerLeft.getScript()}
+  ${scannerRight.getScript()}
   `;
 }
 // ---------------------------------------------------------------------------
