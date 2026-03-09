@@ -17,6 +17,15 @@ export declare class Orchestrator {
      */
     run(intent: string, context: AgentContext, sessionKey: string, onChunk?: (chunk: string, agentId: string) => void): Promise<AgentResult>;
     private _runReAct;
+    /**
+     * Present an error to the human operator and offer recovery options.
+     * Returns:
+     *   "retry"  — operator wants the agent to try the same turn again
+     *   "skip"   — operator wants to abandon this agent and move on
+     *   string   — operator provided context to inject as an observation
+     *   null     — no HITL available, or panel was closed
+     */
+    private _recoverFromError;
     private _singleTurn;
 }
 //# sourceMappingURL=orchestrator.d.ts.map

@@ -227,10 +227,19 @@ class Orchestrator {
                 if (!reportingAgentRan) {
                     const findingsSummary = buildFindingsSummary(specialistResults);
                     const forcedTask = `The scan is complete. Compile a full penetration test report from the findings below.\n\n${findingsSummary}`;
-                    const reportResult = await this._runReAct(model, REPORTING_AGENT_ID, forcedTask, sessionKey, context, onChunk);
+                    let reportResult;
+                    try {
+                        reportResult = await this._runReAct(model, REPORTING_AGENT_ID, forcedTask, sessionKey, context, onChunk);
+                    }
+                    catch (err) {
+                        const isCancel = err instanceof vscode.CancellationError;
+                        context.onStatus?.("orchestrator", isCancel ? "cancelled" : "failed");
+                        throw err;
+                    }
                     lastText = reportResult;
                     reportingAgentRan = true;
                     if (context.cancellationToken.isCancellationRequested) {
+                        context.onStatus?.("orchestrator", "cancelled");
                         break;
                     }
                 }
@@ -252,7 +261,16 @@ class Orchestrator {
             if (delegateId === REPORTING_AGENT_ID && specialistResults.length > 0) {
                 enrichedTask = `${task}\n\n---\n\n${buildFindingsSummary(specialistResults)}`;
             }
-            const specialistResult = await this._runReAct(model, delegateId, enrichedTask, sessionKey, context, onChunk);
+            let specialistResult;
+            try {
+                specialistResult = await this._runReAct(model, delegateId, enrichedTask, sessionKey, context, onChunk);
+            }
+            catch (err) {
+                // A specialist failure or cancellation must stop the whole pipeline.
+                const isCancel = err instanceof vscode.CancellationError;
+                context.onStatus?.("orchestrator", isCancel ? "cancelled" : "failed");
+                throw err;
+            }
             lastText = specialistResult;
             // Track which specialists have run and accumulate their results
             specialistResults.push({ agentId: delegateId, result: specialistResult });
@@ -262,6 +280,7 @@ class Orchestrator {
             // If the specialist detected cancellation but returned normally (instead
             // of throwing), stop the outer loop now without emitting a second status.
             if (context.cancellationToken.isCancellationRequested) {
+                context.onStatus?.("orchestrator", "cancelled");
                 break;
             }
             // 5. Feed the specialist's final result back into the orchestrator
@@ -270,8 +289,7 @@ class Orchestrator {
             // use the final slot for it rather than letting the loop expire silently.
             if (step === MAX_DELEGATE_STEPS - 2 && !reportingAgentRan) {
                 const findingsSummary = buildFindingsSummary(specialistResults);
-                orchestratorInput =
-                    `All testing steps are complete. You MUST now delegate to reporting-agent.\n\n${findingsSummary}`;
+                orchestratorInput = `All testing steps are complete. You MUST now delegate to reporting-agent.\n\n${findingsSummary}`;
             }
         }
         return { text: lastText };
@@ -286,6 +304,9 @@ class Orchestrator {
         const projectContext = buildProjectContext(context.projectConfig);
         let currentInput = `${projectContext}\n\n---\n\n${task}`;
         let lastText = "";
+        // Tracks which turns have already been offered a HITL error-recovery so we
+        // don't loop indefinitely if the same error keeps recurring after a retry.
+        const recoveredTurns = new Set();
         for (let turn = 0; turn < MAX_AGENT_TURNS; turn++) {
             await context.waitIfPaused?.();
             if (context.cancellationToken.isCancellationRequested) {
@@ -297,8 +318,29 @@ class Orchestrator {
                 turnText = await this._singleTurn(model, agent.systemPrompt, currentInput, agentKey, agentId, context, onChunk);
             }
             catch (err) {
-                const status = err instanceof vscode.CancellationError ? "cancelled" : "failed";
-                context.onStatus?.(agentId, status);
+                if (err instanceof vscode.CancellationError) {
+                    context.onStatus?.(agentId, "cancelled");
+                    return lastText;
+                }
+                // Before giving up on this agent, ask the operator if they can help.
+                if (!recoveredTurns.has(turn) && context.onHitlQuestion) {
+                    recoveredTurns.add(turn);
+                    const recovery = await this._recoverFromError(agentId, err, context);
+                    if (recovery === "retry") {
+                        turn--; // undo the upcoming increment — re-run the same turn
+                        continue;
+                    }
+                    if (recovery === "skip") {
+                        context.onStatus?.(agentId, "done");
+                        return (lastText || `Agent ${agentId} was skipped at operator request.`);
+                    }
+                    if (recovery !== null) {
+                        // Operator provided context — inject as an observation and continue
+                        currentInput = `Observation: Human provided assistance: ${recovery}`;
+                        continue;
+                    }
+                }
+                context.onStatus?.(agentId, "failed");
                 throw err;
             }
             lastText = turnText;
@@ -338,33 +380,82 @@ class Orchestrator {
         context.onStatus?.(agentId, "done");
         return lastText;
     }
+    // -- Error recovery HITL ---------------------------------------------------
+    /**
+     * Present an error to the human operator and offer recovery options.
+     * Returns:
+     *   "retry"  — operator wants the agent to try the same turn again
+     *   "skip"   — operator wants to abandon this agent and move on
+     *   string   — operator provided context to inject as an observation
+     *   null     — no HITL available, or panel was closed
+     */
+    async _recoverFromError(agentId, err, context) {
+        if (!context.onHitlQuestion) {
+            return null;
+        }
+        const errMsg = err instanceof Error ? err.message : String(err);
+        context.onStatus?.(agentId, "waiting");
+        let reply;
+        try {
+            reply = await context.onHitlQuestion(agentId, `Agent encountered an error: "${errMsg}"\n\n` +
+                `How would you like to proceed?\n` +
+                `• Type “retry” to try again\n` +
+                `• Type “skip” to abandon this agent and continue the scan\n` +
+                `• Or provide any information that might help the agent continue`);
+        }
+        catch {
+            return null; // panel closed or cancelled
+        }
+        context.onStatus?.(agentId, "running");
+        if (/^skip\b/i.test(reply.trim())) {
+            return "skip";
+        }
+        if (/^retry\b/i.test(reply.trim())) {
+            return "retry";
+        }
+        return reply;
+    }
     // -- Single LLM turn --------------------------------------------------------
     async _singleTurn(model, systemPrompt, userInput, memoryKey, agentId, context, onChunk) {
-        // Filter tools to only the MCP servers the user selected.
-        // If no servers are selected, pass the full tool pool.
-        const tools = context.selectedMcpServers?.length
-            ? vscode.lm.tools.filter((t) => context.selectedMcpServers.some((s) => t.name.startsWith(`mcp_${s}_`)))
-            : vscode.lm.tools;
-        const history = this._memoryStore.get(memoryKey);
-        const messages = [
-            vscode.LanguageModelChatMessage.User(systemPrompt),
-            ...history,
-            vscode.LanguageModelChatMessage.User(userInput),
-        ];
-        let fullText = "";
-        for await (const chunk of this._modelService.stream(model, messages, context.cancellationToken, tools)) {
-            fullText += chunk;
-            onChunk?.(chunk, agentId);
+        // Retry up to 3 times on transient model/network errors (e.g. ERR_HTTP2_PROTOCOL_ERROR).
+        const MAX_RETRIES = 3;
+        let lastError;
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                // Filter tools to only the MCP servers the user selected.
+                const tools = context.selectedMcpServers?.length
+                    ? vscode.lm.tools.filter((t) => context.selectedMcpServers.some((s) => t.name.startsWith(`mcp_${s}_`)))
+                    : vscode.lm.tools;
+                const history = this._memoryStore.get(memoryKey);
+                const messages = [
+                    vscode.LanguageModelChatMessage.User(systemPrompt),
+                    ...history,
+                    vscode.LanguageModelChatMessage.User(userInput),
+                ];
+                let fullText = "";
+                for await (const chunk of this._modelService.stream(model, messages, context.cancellationToken, tools, context.toolInvocationToken)) {
+                    fullText += chunk;
+                    onChunk?.(chunk, agentId);
+                }
+                if (context.cancellationToken.isCancellationRequested) {
+                    throw new vscode.CancellationError();
+                }
+                this._memoryStore.append(memoryKey, vscode.LanguageModelChatMessage.User(userInput));
+                this._memoryStore.append(memoryKey, vscode.LanguageModelChatMessage.Assistant(fullText));
+                return fullText;
+            }
+            catch (err) {
+                if (err instanceof vscode.CancellationError) {
+                    throw err; // never retry on cancellation
+                }
+                lastError = err;
+                if (attempt < MAX_RETRIES) {
+                    // Exponential backoff: 2 s, 4 s before the 2nd and 3rd attempts
+                    await new Promise((r) => setTimeout(r, attempt * 2000));
+                }
+            }
         }
-        // If the generator exited because the token fired (not because the model
-        // finished normally), surface it as a CancellationError so the caller's
-        // try/catch can emit the right status and stop the loop immediately.
-        if (context.cancellationToken.isCancellationRequested) {
-            throw new vscode.CancellationError();
-        }
-        this._memoryStore.append(memoryKey, vscode.LanguageModelChatMessage.User(userInput));
-        this._memoryStore.append(memoryKey, vscode.LanguageModelChatMessage.Assistant(fullText));
-        return fullText;
+        throw lastError;
     }
 }
 exports.Orchestrator = Orchestrator;

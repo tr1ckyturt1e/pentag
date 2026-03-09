@@ -9,7 +9,9 @@ export function getCss(): string {
     display: flex;
     flex-direction: column;
     flex: 0 0 40%;
+    min-width: 0;
     min-height: 0;
+    overflow: hidden;
     border-right: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.1));
   }
 
@@ -71,7 +73,14 @@ export function getCss(): string {
     padding: 2px 6px;
     border-radius: 3px;
     color: #fff;
+    background: #29b6f6; /* default — overridden by sev-* class */
   }
+  /* Severity color palette — CSS classes are CSP-safe, inline style= is not */
+  .sev-critical { background: #7f0000; }
+  .sev-high     { background: #f44336; }
+  .sev-medium   { background: #ff9800; }
+  .sev-low      { background: #4caf50; }
+  .sev-info     { background: #29b6f6; }
   .vuln-confidence-badge {
     flex-shrink: 0;
     font-size: 9px;
@@ -158,6 +167,24 @@ export function getCss(): string {
     border-color: #ef5350;
     color: #ef5350;
   }
+  .vuln-btn-delete {
+    background: rgba(239,83,80,0.12);
+    border-color: #ef5350;
+    color: #ef5350;
+  }
+  .vuln-sev-select {
+    flex: 1;
+    padding: 3px 6px;
+    font-size: 10px;
+    font-weight: 600;
+    font-family: inherit;
+    border-radius: 4px;
+    border: 1px solid var(--vscode-dropdown-border);
+    background: var(--vscode-dropdown-background);
+    color: var(--vscode-dropdown-foreground);
+    cursor: pointer;
+  }
+  .vuln-sev-select:focus { outline: none; border-color: var(--vscode-focusBorder, #007acc); }
   `;
 }
 
@@ -190,16 +217,11 @@ export function getScript(): string {
   /* -- Scanner Left ----------------------------------------------------- */
   (function initScannerLeft() {
 
-    var severityColors = {
-      'critical': '#d32f2f',
-      'high':     '#e64a19',
-      'medium':   '#f57c00',
-      'low':      '#388e3c',
-      'info':     '#0288d1'
-    };
-
-    function severityColor(sev) {
-      return severityColors[(sev || 'info').toLowerCase()] || '#0288d1';
+    // Returns a CSS class name for the severity badge.
+    // CSS classes work reliably in VS Code webviews; inline style= can be stripped by CSP.
+    function sevClass(sev) {
+      var s = (sev || 'info').toLowerCase().trim();
+      return 'sev-' + (['critical','high','medium','low','info'].indexOf(s) !== -1 ? s : 'info');
     }
 
     function removeEmptyLabel(listEl) {
@@ -208,15 +230,16 @@ export function getScript(): string {
     }
 
     /** Build the inner HTML for a vuln card body (shared by tentative + confirmed). */
-    function buildCardBody(vuln, sev, col) {
+    function buildCardBody(vuln, sev) {
       var conf = vuln.confidence || (vuln.type === 'confirmed' ? 'Confirmed' : 'Tentative');
       var confClass = conf.toLowerCase();
-      var scoreHtml = (vuln.confidenceScore != null)
-        ? '<span class="vuln-confidence-score">Score\u00a0' + vuln.confidenceScore + '%</span>'
-        : '';
+      // Always render the score span — show N/A when agent omitted the score
+      var scoreHtml = '<span class="vuln-confidence-score">' +
+        (vuln.confidenceScore != null ? 'Score\u00a0' + vuln.confidenceScore + '%' : 'Score\u00a0N/A') +
+        '</span>';
       return (
         '<div class="vuln-card-header">' +
-          '<span class="vuln-severity-badge" style="background:' + col + '">' + sev.toUpperCase() + '</span>' +
+          '<span class="vuln-severity-badge ' + sevClass(sev) + '">' + sev.toUpperCase() + '</span>' +
           '<span class="vuln-confidence-badge ' + confClass + '">' + escHtml(conf) + '</span>' +
           '<span class="vuln-title">' + escHtml(vuln.title || 'Unknown') + '</span>' +
           scoreHtml +
@@ -228,16 +251,66 @@ export function getScript(): string {
       );
     }
 
-    /** Append a confirmed card (no action buttons) to the confirmed list. */
+    function sevOrder(sev) {
+      var order = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+      return order[(sev || 'info').toLowerCase()] ?? 4;
+    }
+
+    function sortList(listEl) {
+      var cards = Array.from(listEl.querySelectorAll('.vuln-card'));
+      if (cards.length < 2) { return; }
+      cards.sort(function(a, b) { return sevOrder(a.dataset.sev) - sevOrder(b.dataset.sev); });
+      cards.forEach(function(c) { listEl.appendChild(c); });
+    }
+
+    function deduplicateList(listEl) {
+      var seen = new Set();
+      Array.from(listEl.querySelectorAll('.vuln-card')).forEach(function(card) {
+        var key = (card.dataset.title || '') + '||' + (card.dataset.url || '');
+        if (seen.has(key)) { card.remove(); } else { seen.add(key); }
+      });
+    }
+
+    /** Append a confirmed card (with delete + severity-adjust controls) to the confirmed list. */
     function appendConfirmedCard(vuln) {
       var listEl = document.getElementById('confirmedList');
       removeEmptyLabel(listEl);
       var card = document.createElement('div');
       card.className = 'vuln-card';
+      card.dataset.title = vuln.title || '';
+      card.dataset.url = vuln.url || '';
       var sev = (vuln.severity || 'Info');
+      card.dataset.sev = sev.toLowerCase();
       var confirmedVuln = Object.assign({}, vuln, { confidence: 'Confirmed', type: 'confirmed' });
-      card.innerHTML = buildCardBody(confirmedVuln, sev, severityColor(sev));
+      var sevOptions = ['Critical','High','Medium','Low','Info'].map(function(s) {
+        return '<option value="' + s + '"' + (sev === s ? ' selected' : '') + '>' + s + '</option>';
+      }).join('');
+      card.innerHTML =
+        buildCardBody(confirmedVuln, sev) +
+        '<div class="vuln-actions">' +
+          '<select class="vuln-sev-select" title="Adjust severity">' + sevOptions + '</select>' +
+          '<button class="vuln-btn vuln-btn-delete">\u2715 Delete</button>' +
+        '</div>';
+
+      // Severity selector — update badge CSS class + label live
+      card.querySelector('.vuln-sev-select').addEventListener('change', function(e) {
+        var newSev = e.target.value;
+        var badge = card.querySelector('.vuln-severity-badge');
+        badge.className = 'vuln-severity-badge ' + sevClass(newSev);
+        badge.textContent = newSev.toUpperCase();
+      });
+
+      // Delete button
+      card.querySelector('.vuln-btn-delete').addEventListener('click', function() {
+        card.remove();
+        if (!listEl.querySelector('.vuln-card')) {
+          listEl.innerHTML = '<div class="vuln-empty">No confirmed vulnerabilities yet.</div>';
+        }
+      });
+
       listEl.appendChild(card);
+      sortList(listEl);
+      deduplicateList(listEl);
       listEl.scrollTop = listEl.scrollHeight;
     }
 
@@ -251,9 +324,12 @@ export function getScript(): string {
       removeEmptyLabel(listEl);
       var card = document.createElement('div');
       card.className = 'vuln-card';
+      card.dataset.title = vuln.title || '';
+      card.dataset.url = vuln.url || '';
       var sev = (vuln.severity || 'Info');
+      card.dataset.sev = sev.toLowerCase();
       card.innerHTML =
-        buildCardBody(vuln, sev, severityColor(sev)) +
+        buildCardBody(vuln, sev) +
         '<div class="vuln-actions">' +
           '<button class="vuln-btn vuln-btn-confirm">\u2713 Confirm</button>' +
           '<button class="vuln-btn vuln-btn-fp">\u2715 False Positive</button>' +
@@ -277,6 +353,8 @@ export function getScript(): string {
       });
 
       listEl.appendChild(card);
+      sortList(listEl);
+      deduplicateList(listEl);
       listEl.scrollTop = listEl.scrollHeight;
     }
 

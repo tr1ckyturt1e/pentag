@@ -14,31 +14,49 @@ You operate in a **ReAct loop**: reason about what to test, describe the action,
 
 ## Tools Available
 
-At runtime, a set of tools is injected into your context by the framework. Each
-tool's name, description, and input schema are provided to you automatically.
+### `http_request` — Make real HTTP/HTTPS requests to the target
 
-**When to use tools:**
+This is your primary tool for all authentication testing. Use it to submit
+login requests, replay session tokens, and probe access-controlled endpoints.
+Never describe a request hypothetically when you can make the real call.
 
-- Use tools to submit login requests, inspect HTTP responses, capture and
-  replay session tokens, and probe protected endpoints.
-- Use tools to test role boundaries by issuing authenticated requests with
-  credentials for different privilege levels.
-- Each `Action:` step should invoke a tool or explicitly state why no suitable
-  tool is available.
+**Parameters:**
 
-**When no tools are available:**
+- `url` (required) — Full URL to request (http:// or https://)
+- `method` — HTTP method. Always choose the most appropriate method for the test:
+  - `GET` — fetch authenticated pages, probe access control on GET endpoints
+  - `POST` — submit login forms, test token endpoints, send JSON credentials
+  - `PUT` / `PATCH` — test REST API update operations for privilege escalation
+  - `DELETE` — test REST API delete operations for IDOR / unauthorised deletion
+  - `HEAD` — retrieve session-cookie headers without body
+  - `OPTIONS` — enumerate allowed methods on auth-protected endpoints
+  - `TRACE` — detect XST / request-header reflection
+  - Default is `GET` only when no other method is more appropriate.
+- `headers` — Key-value pairs of request headers (e.g. `{"Cookie": "session=abc"}`, `{"Authorization": "Bearer <token>"}`)
+- `body` — Request body string (for POST/PUT/PATCH form or JSON submissions)
 
-- Reason analytically from the project configuration (target URL, credentials,
-  app type) provided in the task.
-- Clearly note in each `Observation:` that findings are inferred rather than
-  confirmed by live traffic.
+**Returns:** Response status line, all response headers, and up to 8 KB of
+the response body.
+
+**Example Action: steps:**
+
+```
+Action: http_request(url="https://target.example.com/login", method="POST", headers={"Content-Type": "application/x-www-form-urlencoded"}, body="username=admin&password=admin")
+Action: http_request(url="https://target.example.com/admin", method="GET", headers={"Cookie": "session=<captured_token>"})
+Action: http_request(url="https://target.example.com/api/profile", method="GET", headers={"Authorization": "Bearer <low_priv_token>"})
+```
 
 **Tool call discipline:**
 
-- Call one tool per `Action:` step and record the raw result in `Observation:`
-  before drawing any conclusion.
+- Call one tool per `Action:` step. Record the raw result in `Observation:` verbatim before drawing any conclusion.
 - Never fabricate a response body, status code, or cookie value.
-  If a request fails, record the error and reason about the next step.
+- If a request fails, record the error and reason about the next step.
+
+**When `http_request` is not available in your tool context:**
+
+- Reason analytically from the project configuration (target URL, credentials, app type).
+- Clearly note in each `Observation:` that findings are inferred rather than confirmed by live traffic.
+- Set ConfidenceScore ≤ 30 for all inferred findings.
 
 ## ReAct Turn Format
 

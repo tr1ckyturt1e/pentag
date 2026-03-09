@@ -42,6 +42,7 @@ const orchestrator_1 = require("../runtime/orchestrator");
 const agentLoader_1 = require("../runtime/agentLoader");
 const modelService_1 = require("../runtime/modelService");
 const memoryStore_1 = require("../runtime/memoryStore");
+const sitemapStore_1 = require("../tools/sitemapStore");
 // ---------------------------------------------------------------------------
 // ProjectPanel — full-editor webview that opens per project
 // ---------------------------------------------------------------------------
@@ -151,11 +152,21 @@ class ProjectPanel {
         }, null, context.subscriptions);
     }
     //  Start the AI scanner
+    //
+    //  Instead of running the orchestrator directly (which has no
+    //  toolInvocationToken and triggers web-access permission pop-ups), this
+    //  method registers all scan state in ScanBridge and opens Copilot Chat
+    //  with "@axis /scan" pre-filled.  The chat participant handler fires with
+    //  a valid request.toolInvocationToken, consumes the registered scan, and
+    //  runs the orchestrator — all MCP tool calls are then authorised silently.
     async _startScan(modelId, mcpServers) {
         if (this._cts) {
             vscode.window.showWarningMessage("A scan is already in progress.");
             return;
         }
+        // Point sitemap tools at this project's directory and clear previous results.
+        (0, sitemapStore_1.setSitemapProjectPath)(this._projectPath);
+        sitemapStore_1.SitemapManager.clear();
         this._cts = new vscode.CancellationTokenSource();
         this._panel.webview.postMessage({ command: "scanStarted" });
         const context = {
@@ -165,6 +176,7 @@ class ProjectPanel {
             findings: [],
             cancellationToken: this._cts.token,
             selectedMcpServers: mcpServers,
+            projectPath: this._projectPath,
             onStatus: (agentId, status) => {
                 try {
                     this._panel.webview.postMessage({
@@ -211,9 +223,9 @@ class ProjectPanel {
                 });
             },
         };
-        const orchestrator = new orchestrator_1.Orchestrator(this._agentLoader, this._modelService, this._memoryStore);
         const intent = `Run a full penetration test on ${this._config.apps[0]?.url ?? "the configured target"}. ` +
             `Project: ${this._config.name}.`;
+        const orchestrator = new orchestrator_1.Orchestrator(this._agentLoader, this._modelService, this._memoryStore);
         try {
             await orchestrator.run(intent, context, this._projectPath, (chunk, agentId) => {
                 try {

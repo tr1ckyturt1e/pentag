@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 export declare class ModelService {
+    private _cachedModel;
+    private _cachedModelId;
     /**
      * Resolve a LanguageModelChat instance.
      * If modelId is provided it is used as a hint; falls back to the first
@@ -19,6 +21,6 @@ export declare class ModelService {
      * @param tools  Pass vscode.lm.tools to expose all registered tools
      *               (ours + MCP). Omit to disable tool calling.
      */
-    stream(model: vscode.LanguageModelChat, messages: vscode.LanguageModelChatMessage[], token: vscode.CancellationToken, tools?: readonly vscode.LanguageModelToolInformation[]): AsyncIterable<string>;
+    stream(model: vscode.LanguageModelChat, messages: vscode.LanguageModelChatMessage[], token: vscode.CancellationToken, tools?: readonly vscode.LanguageModelToolInformation[], toolInvocationToken?: vscode.ChatParticipantToolToken): AsyncIterable<string>;
 }
 //# sourceMappingURL=modelService.d.ts.map

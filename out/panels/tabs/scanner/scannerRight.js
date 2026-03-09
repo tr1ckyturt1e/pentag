@@ -12,7 +12,8 @@ function getCss() {
   .scanner-right {
     display: flex;
     flex-direction: column;
-    flex: 1;
+    flex: 0 0 60%;
+    min-width: 300px;
     min-height: 0;
     overflow: hidden;
     background: var(--vscode-editor-background);
@@ -272,11 +273,13 @@ function getScript() {
     var agentInd    = document.getElementById('hitlAgentIndicator');
     var agentName   = document.getElementById('hitlAgentName');
 
-    // Current streaming bubble reference
-    var streamBubble = null;
-    var streamAgentId = null;
+    // Line buffer — accumulates chunks until a newline is received
+    var lineBuffer    = '';
     // Guard: show "Scan cancelled" only once per scan session
     var scanCancelled = false;
+    // Track which agents have already been announced so HITL-resume doesn't
+    // re-print "Agent X started" on every subsequent 'running' status.
+    var announcedAgents = {};
 
     function hideEmpty() {
       if (emptyEl) { emptyEl.style.display = 'none'; }
@@ -319,21 +322,52 @@ function getScript() {
       addBubble('system', '', text);
     }
 
-    // Start or continue a streaming bubble for an agent
+    // Append a new activity bubble for each parsed line.
+    function showActivityLine(agentId, prefix, text) {
+      var display = text ? (text.length > 140 ? text.slice(0, 140) + '...' : text) : '';
+      addBubble('stream', agentLabel(agentId), display ? prefix + ' ' + display : prefix);
+    }
+
+    // Parse incoming stream chunks for ReAct-format lines.
+    // Thought/Action/DONE are shown for specialist agents.
+    // DELEGATE/TASK/COMPLETE/SUMMARY are shown for the orchestrator.
+    // Observation: (raw tool output) is intentionally suppressed.
     function appendStreamChunk(agentId, chunk) {
       hideEmpty();
-      if (!streamBubble || streamAgentId !== agentId) {
-        // End previous stream bubble
-        streamBubble = addBubble('stream', agentLabel(agentId), '');
-        streamAgentId = agentId;
+      lineBuffer += chunk;
+      var nl = lineBuffer.indexOf('\\n');
+      while (nl !== -1) {
+        var line = lineBuffer.slice(0, nl).trim();
+        lineBuffer = lineBuffer.slice(nl + 1);
+        nl = lineBuffer.indexOf('\\n');
+        if (!line) { continue; }
+        if (line.indexOf('Thought:') === 0) {
+          showActivityLine(agentId, '[Thought]', line.slice(8).trim());
+        } else if (line.indexOf('Action:') === 0) {
+          showActivityLine(agentId, '[Action]', line.slice(7).trim());
+        } else if (line.indexOf('DONE:') === 0) {
+          var summary = line.slice(5).trim();
+          // If summary is just an opening brace the real content is on subsequent
+          // lines (multi-line block) — show only the label with no body text.
+          var doneDisplay = (summary && summary !== '{' && summary !== '{}')
+            ? summary.slice(0, 120) + (summary.length > 120 ? '...' : '')
+            : '';
+          showActivityLine(agentId, '[Done]', doneDisplay);
+        } else if (line.indexOf('DELEGATE:') === 0) {
+          showActivityLine(agentId, '[Delegating to]', line.slice(9).trim());
+        } else if (line.indexOf('TASK:') === 0) {
+          showActivityLine(agentId, '[Task]', line.slice(5).trim());
+        } else if (/^COMPLETE/.test(line)) {
+          showActivityLine(agentId, '[Complete]', '');
+        } else if (line.indexOf('SUMMARY:') === 0) {
+          showActivityLine(agentId, '[Summary]', line.slice(8).trim());
+        }
+        // Observation: and other lines are intentionally suppressed
       }
-      streamBubble.textContent += chunk;
-      scrollToBottom();
     }
 
     function endStreamBubble() {
-      streamBubble = null;
-      streamAgentId = null;
+      lineBuffer = '';  // discard any partial line from the previous turn
     }
 
     function setTyping(visible) {
@@ -399,7 +433,10 @@ function getScript() {
         if (d.status === 'running') {
           endStreamBubble();
           setTyping(true);
-          addSystemBubble(agentLabel(d.agentId) + ' started');
+          if (!announcedAgents[d.agentId]) {
+            announcedAgents[d.agentId] = true;
+            addSystemBubble(agentLabel(d.agentId) + ' started');
+          }
         }
         if (d.status === 'done') {
           setTyping(false);
@@ -409,7 +446,7 @@ function getScript() {
         if (d.status === 'failed') {
           setTyping(false);
           endStreamBubble();
-          addSystemBubble('\u26a0 ' + agentLabel(d.agentId) + ' failed');
+          addSystemBubble(agentLabel(d.agentId) + ' failed');
         }
         if (d.status === 'cancelled' && !scanCancelled) {
           scanCancelled = true;
@@ -436,11 +473,17 @@ function getScript() {
         });
         toRemove.forEach(function(n) { messagesEl.removeChild(n); });
         if (emptyEl) { emptyEl.style.display = ''; }
-        streamBubble = null; streamAgentId = null;
+        lineBuffer = '';
         scanCancelled = false;
+        announcedAgents = {};
         clearWaiting();
         setTyping(false);
         addSystemBubble('Scan started');
+      }
+
+      // Hint shown after the webview opens Copilot Chat for @axis /scan
+      if (d.command === 'scanNotice') {
+        addSystemBubble(d.text);
       }
     });
 
