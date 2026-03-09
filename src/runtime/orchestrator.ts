@@ -51,6 +51,14 @@ const MAX_AGENT_TURNS = 10;
 /** The agent that must always run last before the pipeline can complete. */
 const REPORTING_AGENT_ID = "reporting-agent";
 
+/** Names of tools registered by this extension. Agents may only call these. */
+const OWN_TOOL_NAMES = new Set([
+  "http_request",
+  "sitemap_read",
+  "sitemap_summary",
+  "sitemap_annotate",
+]);
+
 // -- Parsers -----------------------------------------------------------------
 
 function parseDelegate(text: string): string | null {
@@ -507,14 +515,26 @@ export class Orchestrator {
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
-        // Filter tools to only the MCP servers the user selected.
-        const tools = context.selectedMcpServers?.length
-          ? vscode.lm.tools.filter((t) =>
-              context.selectedMcpServers!.some((s) =>
-                t.name.startsWith(`mcp_${s}_`),
-              ),
-            )
-          : vscode.lm.tools;
+        // Build a bounded tool set to avoid exceeding the 128-tool-per-request
+        // limit imposed by the model API. Never pass vscode.lm.tools unfiltered —
+        // other installed extensions contribute tools to that list and the total
+        // can far exceed 128.
+        //
+        // The orchestrator only routes work; it never calls tools itself.
+        // Specialist agents get our own 4 tools plus any user-selected MCP tools.
+        const ownTools = vscode.lm.tools.filter((t) => OWN_TOOL_NAMES.has(t.name));
+        const mcpTools =
+          agentId !== "orchestrator" && context.selectedMcpServers?.length
+            ? vscode.lm.tools.filter((t) =>
+                context.selectedMcpServers!.some((s) =>
+                  t.name.startsWith(`mcp_${s}_`),
+                ),
+              )
+            : [];
+        const tools =
+          agentId === "orchestrator"
+            ? []
+            : [...ownTools, ...mcpTools].slice(0, 128);
 
         const history = this._memoryStore.get(memoryKey);
         const messages: vscode.LanguageModelChatMessage[] = [
