@@ -2,6 +2,13 @@ import * as vscode from "vscode";
 import { ProjectConfig } from "../views/newProjectView";
 export declare class ProjectPanel {
     private static readonly _open;
+    /**
+     * Optional callback invoked whenever a scan starts or ends.
+     * Receives the folder name (basename of projectPath) while scanning, or
+     * null when the scan finishes. Wired up by OpenProjectViewProvider so the
+     * My Projects sidebar can show a live "scanning" indicator.
+     */
+    static onScanStateChanged: ((folderName: string | null) => void) | undefined;
     private readonly _panel;
     private _config;
     private _cts;

@@ -73,7 +73,7 @@ function getCss() {
     flex-shrink: 0;
   }
 
-  /* ── Tools selector ────────────────────────────────────────────────────── */
+  /* ── MCP server selector ────────────────────────────────────────────────── */
   .tools-wrapper {
     position: relative;
     flex-shrink: 0;
@@ -97,6 +97,7 @@ function getCss() {
     font-family: inherit;
     cursor: pointer;
     white-space: nowrap;
+    min-width: 120px;
   }
   .btn-tools:hover { background: var(--vscode-list-hoverBackground); }
   .tools-dropdown {
@@ -104,33 +105,51 @@ function getCss() {
     position: absolute;
     top: calc(100% + 4px);
     left: 0;
-    z-index: 100;
-    min-width: 240px;
-    max-height: 260px;
+    z-index: 200;
+    min-width: 200px;
+    max-height: 280px;
     overflow-y: auto;
-    background: var(--vscode-dropdown-background);
-    border: 1px solid var(--vscode-dropdown-border);
-    border-radius: 3px;
+    background: var(--vscode-editorWidget-background, var(--vscode-dropdown-background));
+    border: 1px solid var(--vscode-focusBorder, var(--vscode-dropdown-border));
+    border-radius: 4px;
     padding: 4px 0;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.55);
   }
   .tools-dropdown.open { display: block; }
   .tools-dropdown-empty {
-    padding: 8px 12px;
+    padding: 10px 14px;
     font-size: 11px;
     opacity: 0.55;
+    font-style: italic;
   }
-  .tool-item {
+  /* Clean click-to-select MCP server rows (no checkboxes) */
+  .mcp-item {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 12px;
+    padding: 8px 14px;
     cursor: pointer;
+    font-size: 12px;
+    border-left: 2px solid transparent;
     user-select: none;
+    transition: background 0.1s;
+    color: var(--vscode-foreground);
   }
-  .tool-item:hover { background: var(--vscode-list-hoverBackground); }
-  .tool-item input[type='checkbox'] { flex-shrink: 0; cursor: pointer; }
-  .tool-item-name { font-size: 12px; }
+  .mcp-item:hover { background: var(--vscode-list-hoverBackground); }
+  .mcp-item.selected {
+    background: rgba(79,195,247,0.1);
+    border-left-color: #4fc3f7;
+    color: #4fc3f7;
+  }
+  .mcp-item-check {
+    width: 14px;
+    flex-shrink: 0;
+    font-size: 12px;
+    font-weight: 700;
+    opacity: 0;
+  }
+  .mcp-item.selected .mcp-item-check { opacity: 1; }
+  .mcp-item-name { flex: 1; }
 
   .btn-run-scanner {
     display: inline-flex;
@@ -277,29 +296,38 @@ function getScript() {
       var dd = document.getElementById('toolsDropdown');
       dd.innerHTML = '';
       if (!servers || servers.length === 0) {
-        dd.innerHTML = '<span class="tools-dropdown-empty">No MCP servers configured</span>';
+        dd.innerHTML = '<span class="tools-dropdown-empty">No MCP servers detected</span>';
         updateToolsButton();
         return;
       }
       servers.forEach(function(serverName) {
-        var item = document.createElement('label');
-        item.className = 'tool-item';
-        var cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.value = serverName;
-        cb.addEventListener('change', function() {
-          if (cb.checked) {
-            if (!selectedServers.includes(serverName)) { selectedServers.push(serverName); }
-          } else {
+        var item = document.createElement('div');
+        item.className = 'mcp-item';
+        item.dataset.server = serverName;
+
+        var check = document.createElement('span');
+        check.className = 'mcp-item-check';
+        check.textContent = '\u2713';  // ✓
+
+        var nameEl = document.createElement('span');
+        nameEl.className = 'mcp-item-name';
+        nameEl.textContent = serverName;
+
+        item.appendChild(check);
+        item.appendChild(nameEl);
+
+        item.addEventListener('click', function(e) {
+          e.stopPropagation();
+          if (selectedServers.indexOf(serverName) !== -1) {
             selectedServers = selectedServers.filter(function(n) { return n !== serverName; });
+            item.classList.remove('selected');
+          } else {
+            selectedServers.push(serverName);
+            item.classList.add('selected');
           }
           updateToolsButton();
         });
-        var nameEl = document.createElement('span');
-        nameEl.className = 'tool-item-name';
-        nameEl.textContent = serverName;
-        item.appendChild(cb);
-        item.appendChild(nameEl);
+
         dd.appendChild(item);
       });
       updateToolsButton();
@@ -307,9 +335,13 @@ function getScript() {
 
     function updateToolsButton() {
       var btn = document.getElementById('btnTools');
-      btn.textContent = selectedServers.length === 0
-        ? 'None selected \u25BC'
-        : selectedServers.length + ' selected \u25BC';
+      if (selectedServers.length === 0) {
+        btn.textContent = 'MCP: none \u25BC';
+      } else if (selectedServers.length === 1) {
+        btn.textContent = selectedServers[0] + ' \u25BC';
+      } else {
+        btn.textContent = selectedServers.length + ' servers \u25BC';
+      }
     }
 
     document.getElementById('btnTools').addEventListener('click', function(e) {

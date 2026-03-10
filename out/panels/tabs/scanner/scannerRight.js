@@ -87,6 +87,26 @@ function getCss() {
   .hitl-bubble-row.human .hitl-bubble-label { text-align: right; }
   .hitl-bubble-row.system .hitl-bubble-label { text-align: center; }
 
+  /* Expand toggle button inside bubbles */
+  .bubble-expand-btn {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 0 5px;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 16px;
+    border-radius: 3px;
+    cursor: pointer;
+    background: rgba(79,195,247,0.12);
+    color: #4fc3f7;
+    border: 1px solid rgba(79,195,247,0.25);
+    vertical-align: middle;
+    user-select: none;
+    flex-shrink: 0;
+    transition: background 0.15s;
+  }
+  .bubble-expand-btn:hover { background: rgba(79,195,247,0.25); }
+
   .hitl-bubble {
     padding: 9px 13px;
     border-radius: 12px;
@@ -294,14 +314,23 @@ function getScript() {
         'orchestrator':    'Orchestrator',
         'recon-agent':     'Recon Agent',
         'auth-agent':      'Auth Agent',
-        'exploit-agent':   'Exploit Agent',
+        'login-agent':     'Login Agent',
+        'crawl-agent':     'Crawl Agent',
+        'audit-agent':     'Audit Agent',
         'reporting-agent': 'Reporting Agent'
       };
       return labels[agentId] || agentId;
     }
 
+    // Truncation limits per bubble type
+    var TRUNCATE = { stream: 120, agent: 300, human: 9999, system: 9999 };
+
     function addBubble(type, label, text) {
       hideEmpty();
+      var limit = TRUNCATE[type] || 120;
+      var isTruncated = text && text.length > limit;
+      var displayText = isTruncated ? text.slice(0, limit) + '\u2026' : (text || '');
+
       var row = document.createElement('div');
       row.className = 'hitl-bubble-row ' + type;
       var labelEl = document.createElement('div');
@@ -309,7 +338,28 @@ function getScript() {
       labelEl.textContent = label;
       var bubble = document.createElement('div');
       bubble.className = 'hitl-bubble';
-      bubble.textContent = text;
+      bubble.textContent = displayText;
+
+      if (isTruncated) {
+        var expandBtn = document.createElement('button');
+        expandBtn.className = 'bubble-expand-btn';
+        expandBtn.textContent = '+';
+        expandBtn.title = 'Show full message';
+        (function(fullText, shortText) {
+          var expanded = false;
+          expandBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            expanded = !expanded;
+            bubble.textContent = expanded ? fullText : shortText + '\u2026';
+            expandBtn.textContent = expanded ? '\u2212' : '+';
+            expandBtn.title = expanded ? 'Collapse' : 'Show full message';
+            bubble.appendChild(expandBtn);
+            scrollToBottom();
+          });
+        })(text, text.slice(0, limit));
+        bubble.appendChild(expandBtn);
+      }
+
       row.appendChild(labelEl);
       row.appendChild(bubble);
       // Insert before typing indicator
@@ -323,9 +373,9 @@ function getScript() {
     }
 
     // Append a new activity bubble for each parsed line.
+    // Full text is passed — addBubble handles truncation and the expand button.
     function showActivityLine(agentId, prefix, text) {
-      var display = text ? (text.length > 140 ? text.slice(0, 140) + '...' : text) : '';
-      addBubble('stream', agentLabel(agentId), display ? prefix + ' ' + display : prefix);
+      addBubble('stream', agentLabel(agentId), text ? prefix + ' ' + text : prefix);
     }
 
     // Parse incoming stream chunks for ReAct-format lines.
@@ -422,9 +472,9 @@ function getScript() {
     window.addEventListener('message', function(e) {
       var d = e.data;
 
-      // Streaming agent reasoning chunks
+      // Streaming agent reasoning chunks — keep typing indicator visible
+      // while the agent is actively generating (it only hides on done/failed).
       if (d.command === 'scannerChunk') {
-        setTyping(false);
         appendStreamChunk(d.agentId, d.text);
       }
 

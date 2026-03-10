@@ -42,6 +42,8 @@ class OpenProjectViewProvider {
     _context;
     static viewType = "pentag.openProjectView";
     _view;
+    /** Folder name (basename) of the project currently being scanned, or null */
+    _scanningFolder = null;
     constructor(_context) {
         this._context = _context;
     }
@@ -53,6 +55,12 @@ class OpenProjectViewProvider {
         this._view = webviewView;
         webviewView.webview.options = { enableScripts: true };
         webviewView.webview.html = this._getHtml(webviewView.webview);
+        // Listen for scan state changes from ProjectPanel and push live updates
+        // to the webview so the indicator appears without a full HTML refresh.
+        projectPanel_1.ProjectPanel.onScanStateChanged = (folder) => {
+            this._scanningFolder = folder;
+            this._view?.webview.postMessage({ command: "scanState", folder: folder ?? null });
+        };
         webviewView.webview.onDidReceiveMessage((message) => {
             if (message.command === "loadProject" && message.folderName) {
                 const workspacePath = this._context.globalState.get("pentag.workspacePath");
@@ -130,14 +138,20 @@ class OpenProjectViewProvider {
         const nonce = this._getNonce();
         const workspacePath = this._context.globalState.get("pentag.workspacePath") ?? "";
         const projects = this._scanProjects();
+        const scanningFolder = this._scanningFolder;
         const listHtml = projects.length === 0
             ? `<p class="empty-msg">${workspacePath ? "No projects found in workspace." : "No workspace configured - set one in Settings."}</p>`
             : projects
-                .map((p) => `
-      <div class="project-item" data-folder="${p.folderName.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}">
+                .map((p) => {
+                const isScanning = p.folderName === scanningFolder;
+                return `
+      <div class="project-item${isScanning ? " scanning" : ""}" data-folder="${p.folderName.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}">
         <div class="proj-main">
-          <div>
-            <div class="proj-name">${p.name.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>
+          <div class="proj-info">
+            <div class="proj-name-row">
+              <span class="proj-name">${p.name.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</span>
+              <span class="scan-badge" title="Scan running">&#9679; scanning</span>
+            </div>
             <div class="proj-meta">
               <span class="proj-type ${p.type.toLowerCase()}">${p.type}</span>
               ${p.createdAt ? `<span class="proj-date">${new Date(p.createdAt).toLocaleDateString()}</span>` : ""}
@@ -145,7 +159,8 @@ class OpenProjectViewProvider {
           </div>
           <button class="btn-load" data-action="load" data-folder="${p.folderName.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}">Load</button>
         </div>
-      </div>`)
+      </div>`;
+            })
                 .join("");
         return `<!DOCTYPE html>
 <html lang="en">
@@ -255,6 +270,40 @@ class OpenProjectViewProvider {
     gap: 8px;
   }
 
+  .proj-info { flex: 1; min-width: 0; }
+
+  .proj-name-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 3px;
+  }
+
+  /* Scanning badge — hidden by default, shown on .project-item.scanning */
+  .scan-badge {
+    display: none;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    color: #4fc3f7;
+    background: rgba(79,195,247,0.12);
+    border: 1px solid rgba(79,195,247,0.3);
+    padding: 1px 5px;
+    border-radius: 10px;
+    white-space: nowrap;
+    animation: scan-pulse 1.4s ease-in-out infinite;
+    flex-shrink: 0;
+  }
+  .project-item.scanning .scan-badge { display: inline-flex; align-items: center; gap: 3px; }
+  .project-item.scanning {
+    border-color: rgba(79,195,247,0.25);
+    background: rgba(79,195,247,0.04);
+  }
+  @keyframes scan-pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.5; }
+  }
+
   .btn-load {
     flex-shrink: 0;
     background: var(--vscode-button-background);
@@ -292,6 +341,22 @@ ${listHtml}
 
   document.getElementById('btnRefresh').addEventListener('click', function() {
     vscode.postMessage({ command: 'refresh' });
+  });
+
+  // Live scan-state updates from ProjectPanel (no full-page refresh needed)
+  window.addEventListener('message', function(e) {
+    var d = e.data;
+    if (d.command === 'scanState') {
+      // Remove scanning class from all items first
+      document.querySelectorAll('.project-item.scanning').forEach(function(el) {
+        el.classList.remove('scanning');
+      });
+      // Apply to the scanning project if one is active
+      if (d.folder) {
+        var match = document.querySelector('[data-folder="' + d.folder + '"]');
+        if (match) { match.classList.add('scanning'); }
+      }
+    }
   });
 </script>
 </body>

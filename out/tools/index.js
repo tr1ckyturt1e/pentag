@@ -40,6 +40,7 @@ const https = __importStar(require("https"));
 const http = __importStar(require("http"));
 const url_1 = require("url");
 const sitemapStore_1 = require("./sitemapStore");
+const sessionStore_1 = require("../runtime/sessionStore");
 // ---------------------------------------------------------------------------
 // Tool registry — maps tool names to their implementations for direct dispatch
 // when vscode.lm.invokeTool() is unavailable (webview-triggered scans).
@@ -47,7 +48,44 @@ const sitemapStore_1 = require("./sitemapStore");
 exports.toolRegistry = new Map();
 class HttpRequestTool {
     async invoke(options, _token) {
-        const { url, method = "GET", headers = {}, body } = options.input;
+        const { url, method = "GET", headers = {}, body, followRedirects = false } = options.input;
+        // -----------------------------------------------------------------------
+        // Session cookie injection — auto-prepend cookies from the project session
+        // store unless the caller has already set a Cookie header explicitly.
+        // -----------------------------------------------------------------------
+        const projectPath = (0, sessionStore_1.getSessionProjectPath)();
+        const sessionCookies = projectPath ? (0, sessionStore_1.getCookieHeader)(projectPath, url) : "";
+        const mergedHeaders = { ...headers };
+        if (sessionCookies) {
+            const callerCookie = mergedHeaders["Cookie"] ?? mergedHeaders["cookie"] ?? "";
+            if (callerCookie) {
+                // Merge: session cookies first, then caller overrides
+                mergedHeaders["Cookie"] = `${sessionCookies}; ${callerCookie}`;
+                delete mergedHeaders["cookie"];
+            }
+            else {
+                mergedHeaders["Cookie"] = sessionCookies;
+            }
+        }
+        // -----------------------------------------------------------------------
+        // Auth header injection — Bearer tokens, API keys, custom auth headers.
+        // Stored by the Login Agent via session_set_token. Expired tokens are
+        // skipped automatically. Caller-supplied headers always win over stored ones.
+        // -----------------------------------------------------------------------
+        if (projectPath) {
+            const authHeaders = (0, sessionStore_1.getAuthHeaders)(projectPath);
+            for (const [name, value] of Object.entries(authHeaders)) {
+                const callerHasHeader = Object.keys(mergedHeaders)
+                    .some(k => k.toLowerCase() === name.toLowerCase());
+                if (!callerHasHeader) {
+                    mergedHeaders[name] = value;
+                }
+            }
+        }
+        // If followRedirects is enabled, resolve the chain before returning.
+        if (followRedirects) {
+            return this._invokeFollowingRedirects(url, method, mergedHeaders, body, projectPath, 10);
+        }
         let parsed;
         try {
             parsed = new url_1.URL(url);
@@ -67,7 +105,7 @@ class HttpRequestTool {
         const result = await new Promise((resolve) => {
             const reqOptions = {
                 method: method.toUpperCase(),
-                headers,
+                headers: mergedHeaders,
                 timeout: 30000,
             };
             // Hoist body-accumulation state to Promise scope so both the response
@@ -108,28 +146,49 @@ class HttpRequestTool {
                     mimeType,
                     parameters: parameters.length ? parameters : undefined,
                 });
+                // Auto-detect auth tokens from JSON response bodies (best-effort).
+                // Handles OAuth2 access_token, id_token, and common custom fields.
+                // The Login Agent's explicit session_set_token calls always override.
+                if (projectPath) {
+                    (0, sessionStore_1.autoDetectTokensFromBody)(projectPath, statusCode, bodyText);
+                }
                 const headerLines = Object.entries(rawResponseHeaders)
                     .map(([k, v]) => `${k}: ${v}`)
                     .join("\n");
+                // On 401, surface the WWW-Authenticate scheme so agents adapt their
+                // login strategy (Bearer, Basic, Digest, NTLM, etc.).
+                const wwwAuth = rawResponseHeaders["www-authenticate"];
+                const authHint = (statusCode === 401 && wwwAuth)
+                    ? `\n[AUTH-REQUIRED] ${(0, sessionStore_1.describeWwwAuthenticate)(wwwAuth)}\n`
+                    : "";
                 resolve(`HTTP ${statusCode} ${statusMessage}\n` +
                     `${headerLines}\n\n` +
+                    authHint +
                     truncatedBody);
             };
             const req = lib.request(url, reqOptions, (res) => {
                 statusCode = res.statusCode ?? 0;
                 statusMessage = res.statusMessage ?? "";
                 rawResponseHeaders = {};
+                // Capture Set-Cookie before flattening so we can parse them properly
+                const setCookieArray = res.headers["set-cookie"] ?? [];
                 for (const [k, v] of Object.entries(res.headers)) {
                     rawResponseHeaders[k] = Array.isArray(v) ? v.join(", ") : (v ?? "");
                 }
                 mimeType = rawResponseHeaders["content-type"];
-                // Accumulate response body chunks; stop early once we hit the 8 KB cap.
+                // Store any new session cookies emitted by this response
+                if (projectPath && setCookieArray.length > 0) {
+                    (0, sessionStore_1.storeCookies)(projectPath, url, setCookieArray);
+                }
+                // Accumulate response body chunks; stop early once we hit the 64 KB cap.
+                // 64 KB is large enough for most login pages (including CSRF hidden fields)
+                // while still bounding memory use for large API responses.
                 res.on("data", (c) => {
                     if (!bodyTruncated) {
-                        const remaining = 8192 - totalBodyBytes;
+                        const remaining = 65536 - totalBodyBytes;
                         chunks.push(remaining < c.length ? c.slice(0, remaining) : c);
                         totalBodyBytes += c.length;
-                        if (totalBodyBytes >= 8192) {
+                        if (totalBodyBytes >= 65536) {
                             bodyTruncated = true;
                             res.destroy(); // stop downloading the rest of the body
                         }
@@ -159,6 +218,79 @@ class HttpRequestTool {
         });
         return new vscode.LanguageModelToolResult([
             new vscode.LanguageModelTextPart(result),
+        ]);
+    }
+    /**
+     * Make a request and follow HTTP 3xx redirects automatically up to maxHops times.
+     * Cookies from each redirect response are stored in SessionStore before the next hop.
+     */
+    async _invokeFollowingRedirects(startUrl, method, headers, body, projectPath, maxHops) {
+        let currentUrl = startUrl;
+        let currentMethod = method;
+        let hops = 0;
+        const hopLog = [];
+        while (hops <= maxHops) {
+            // Build a synthetic input and reuse the core invoke logic (without redirect)
+            const syntheticInput = {
+                url: currentUrl,
+                method: currentMethod,
+                headers,
+                body: currentMethod === "GET" || currentMethod === "HEAD" ? undefined : body,
+                followRedirects: false,
+            };
+            const result = await this.invoke({ input: syntheticInput, toolInvocationToken: undefined }, new vscode.CancellationTokenSource().token);
+            // Extract the text from the result
+            const text = result.content[0].value;
+            hopLog.push(`[Hop ${hops}] ${currentMethod} ${currentUrl}\n${text.split("\n")[0]}`);
+            // Check for redirect status code
+            const statusMatch = text.match(/^HTTP (\d+)/);
+            const statusCode = statusMatch ? parseInt(statusMatch[1], 10) : 0;
+            if (statusCode >= 300 && statusCode < 400) {
+                const locationMatch = text.match(/^location:\s*(.+)$/im);
+                if (!locationMatch) {
+                    hopLog.push("[Redirect] No Location header found — stopping.");
+                    break;
+                }
+                let nextUrl = locationMatch[1].trim();
+                // Resolve relative URLs
+                try {
+                    nextUrl = new url_1.URL(nextUrl, currentUrl).toString();
+                }
+                catch {
+                    break;
+                }
+                // After a POST redirect, follow as GET (PRG pattern)
+                if (currentMethod === "POST" && (statusCode === 301 || statusCode === 302 || statusCode === 303)) {
+                    currentMethod = "GET";
+                }
+                // Refresh cookie and auth headers for next hop from updated session store
+                if (projectPath) {
+                    const freshCookies = (0, sessionStore_1.getCookieHeader)(projectPath, nextUrl);
+                    if (freshCookies) {
+                        headers = { ...headers, Cookie: freshCookies };
+                    }
+                    // Also re-inject any Bearer tokens / custom auth headers stored
+                    // by the Login Agent via session_set_token.
+                    const freshAuth = (0, sessionStore_1.getAuthHeaders)(projectPath);
+                    for (const [name, value] of Object.entries(freshAuth)) {
+                        const already = Object.keys(headers).some((k) => k.toLowerCase() === name.toLowerCase());
+                        if (!already) {
+                            headers = { ...headers, [name]: value };
+                        }
+                    }
+                }
+                currentUrl = nextUrl;
+                hops++;
+                continue;
+            }
+            // Non-redirect response — return the final result with hop log prepended
+            const finalText = `[Followed ${hops} redirect(s)]\n${hopLog.join("\n")}\n\n[Final Response]\n${text}`;
+            return new vscode.LanguageModelToolResult([
+                new vscode.LanguageModelTextPart(finalText),
+            ]);
+        }
+        return new vscode.LanguageModelToolResult([
+            new vscode.LanguageModelTextPart(`[Redirect loop or too many hops (${hops}). Stopping.]\n${hopLog.join("\n")}`),
         ]);
     }
 }
@@ -229,6 +361,54 @@ class SitemapAnnotateTool {
         ]);
     }
 }
+class SessionSetTokenTool {
+    async invoke(options, _token) {
+        const { headerName, headerValue, expiresInSeconds, refreshToken, scheme } = options.input;
+        if (!headerName || !headerValue) {
+            return new vscode.LanguageModelToolResult([
+                new vscode.LanguageModelTextPart("Error: headerName and headerValue are both required."),
+            ]);
+        }
+        const projectPath = (0, sessionStore_1.getSessionProjectPath)();
+        if (!projectPath) {
+            return new vscode.LanguageModelToolResult([
+                new vscode.LanguageModelTextPart("No active project path — cannot store token. Ensure the project scan has started."),
+            ]);
+        }
+        (0, sessionStore_1.storeToken)(projectPath, headerName, headerValue, expiresInSeconds, refreshToken, scheme);
+        const expNote = expiresInSeconds != null
+            ? ` (expires in ${expiresInSeconds}s)`
+            : " (no expiry set)";
+        const refreshNote = refreshToken ? " | refresh_token stored" : "";
+        const preview = headerValue.length > 40 ? headerValue.slice(0, 37) + "..." : headerValue;
+        return new vscode.LanguageModelToolResult([
+            new vscode.LanguageModelTextPart(`Token stored successfully.\n` +
+                `  Header : ${headerName}: ${preview}${expNote}${refreshNote}\n` +
+                `  Scheme : ${scheme ?? "(not specified)"}\n` +
+                `This header will be injected automatically into all subsequent http_request calls.\n` +
+                `Use session_export to verify the full credential set.`),
+        ]);
+    }
+}
+// ---------------------------------------------------------------------------
+// SessionExportTool — lets agents inspect ALL active session credentials
+// (cookies + tokens) to confirm login succeeded and understand what auth
+// material is available for the current scan.
+// ---------------------------------------------------------------------------
+class SessionExportTool {
+    async invoke(_options, _token) {
+        const projectPath = (0, sessionStore_1.getSessionProjectPath)();
+        if (!projectPath) {
+            return new vscode.LanguageModelToolResult([
+                new vscode.LanguageModelTextPart("No active project path — session store is not initialised yet."),
+            ]);
+        }
+        const summary = (0, sessionStore_1.exportSession)(projectPath);
+        return new vscode.LanguageModelToolResult([
+            new vscode.LanguageModelTextPart(summary),
+        ]);
+    }
+}
 // ---------------------------------------------------------------------------
 // registerTools — call once from extension.ts activate()
 // ---------------------------------------------------------------------------
@@ -241,12 +421,16 @@ function registerTools(context) {
     const sitemapReadTool = new SitemapReadTool();
     const sitemapSummaryTool = new SitemapSummaryTool();
     const sitemapAnnotateTool = new SitemapAnnotateTool();
+    const sessionExportTool = new SessionExportTool();
+    const sessionSetTokenTool = new SessionSetTokenTool();
     // Populate local registry for direct dispatch
     exports.toolRegistry.set("http_request", httpTool);
     exports.toolRegistry.set("sitemap_read", sitemapReadTool);
     exports.toolRegistry.set("sitemap_summary", sitemapSummaryTool);
     exports.toolRegistry.set("sitemap_annotate", sitemapAnnotateTool);
+    exports.toolRegistry.set("session_export", sessionExportTool);
+    exports.toolRegistry.set("session_set_token", sessionSetTokenTool);
     // Register with VS Code LM API
-    context.subscriptions.push(vscode.lm.registerTool("http_request", httpTool), vscode.lm.registerTool("sitemap_read", sitemapReadTool), vscode.lm.registerTool("sitemap_summary", sitemapSummaryTool), vscode.lm.registerTool("sitemap_annotate", sitemapAnnotateTool));
+    context.subscriptions.push(vscode.lm.registerTool("http_request", httpTool), vscode.lm.registerTool("sitemap_read", sitemapReadTool), vscode.lm.registerTool("sitemap_summary", sitemapSummaryTool), vscode.lm.registerTool("sitemap_annotate", sitemapAnnotateTool), vscode.lm.registerTool("session_export", sessionExportTool), vscode.lm.registerTool("session_set_token", sessionSetTokenTool));
 }
 //# sourceMappingURL=index.js.map

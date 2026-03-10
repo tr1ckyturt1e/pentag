@@ -10,12 +10,21 @@ import { ModelService } from "../runtime/modelService";
 import { MemoryStore } from "../runtime/memoryStore";
 import { AgentContext } from "../types/agent";
 import { setSitemapProjectPath, SitemapManager } from "../tools/sitemapStore";
+import { setSessionProjectPath, clearSession } from "../runtime/sessionStore";
 
 // ---------------------------------------------------------------------------
 // ProjectPanel — full-editor webview that opens per project
 // ---------------------------------------------------------------------------
 export class ProjectPanel {
   private static readonly _open = new Map<string, ProjectPanel>();
+
+  /**
+   * Optional callback invoked whenever a scan starts or ends.
+   * Receives the folder name (basename of projectPath) while scanning, or
+   * null when the scan finishes. Wired up by OpenProjectViewProvider so the
+   * My Projects sidebar can show a live "scanning" indicator.
+   */
+  public static onScanStateChanged: ((folderName: string | null) => void) | undefined;
 
   private readonly _panel: vscode.WebviewPanel;
   private _config: ProjectConfig;
@@ -174,9 +183,12 @@ export class ProjectPanel {
 
     // Point sitemap tools at this project's directory and clear previous results.
     setSitemapProjectPath(this._projectPath);
+    setSessionProjectPath(this._projectPath);
     SitemapManager.clear();
+    clearSession(this._projectPath);
 
     this._cts = new vscode.CancellationTokenSource();
+    ProjectPanel.onScanStateChanged?.(path.basename(this._projectPath));
     this._panel.webview.postMessage({ command: "scanStarted" });
 
     const context: AgentContext = {
@@ -276,6 +288,7 @@ export class ProjectPanel {
       this._hitlReject = undefined;
       this._isPaused = false;
       this._pauseResolve = undefined;
+      ProjectPanel.onScanStateChanged?.(null);
       try {
         this._panel.webview.postMessage({ command: "scanEnded" });
       } catch {
@@ -297,21 +310,79 @@ export class ProjectPanel {
     }
   }
 
-  //  Push MCP server names derived from registered LM tools to webview.
-  //  MCP tools follow the naming convention: mcp_<serverName>_<toolName>.
-  //  We deduplicate by server name and send only the server list.
+  //  Push MCP server names to the webview.
+  //  VS Code's getConfiguration() re-interprets dots in server IDs (e.g.
+  //  "com.microsoft/playwright-mcp") as nested object paths, so Object.keys()
+  //  there yields "com" and "io" instead of the real identifiers.
+  //  We bypass that by reading .vscode/mcp.json directly from disk, and fall
+  //  back to inspecting the raw settings value, then LM tool names.
   private async _pushTools(): Promise<void> {
     try {
-      const serverNames = [
-        ...new Set(
-          vscode.lm.tools
-            .map((t) => {
-              const m = t.name.match(/^mcp_([^_]+)_/);
-              return m ? m[1] : null;
-            })
-            .filter((s): s is string => s !== null),
-        ),
-      ];
+      let serverNames: string[] = [];
+
+      // ── 1. Read .vscode/mcp.json directly (most reliable source) ─────────
+      for (const folder of vscode.workspace.workspaceFolders ?? []) {
+        try {
+          const uri = vscode.Uri.joinPath(folder.uri, ".vscode", "mcp.json");
+          const raw = await vscode.workspace.fs.readFile(uri);
+          const parsed = JSON.parse(
+            Buffer.from(raw).toString("utf8"),
+          ) as Record<string, unknown>;
+          const servers = (parsed["servers"] ?? {}) as Record<string, unknown>;
+          const keys = Object.keys(servers);
+          if (keys.length > 0) {
+            serverNames = keys;
+            break;
+          }
+        } catch {
+          /* file absent or invalid JSON — try next source */
+        }
+      }
+
+      // ── 2. inspect() the raw merged settings value (avoids dot-splitting) ─
+      if (serverNames.length === 0) {
+        const insp = vscode.workspace
+          .getConfiguration()
+          .inspect<Record<string, unknown>>("mcp.servers");
+        for (const val of [
+          insp?.workspaceFolderValue,
+          insp?.workspaceValue,
+          insp?.globalValue,
+        ]) {
+          if (val && typeof val === "object") {
+            const keys = Object.keys(val);
+            if (keys.length > 0) {
+              serverNames = keys;
+              break;
+            }
+          }
+        }
+      }
+
+      // ── 3. Last resort: derive from registered LM tool names ─────────────
+      if (serverNames.length === 0) {
+        serverNames = [
+          ...new Set(
+            vscode.lm.tools
+              .filter(
+                (t) =>
+                  t.name.startsWith("mcp_") || t.name.startsWith("mcp__"),
+              )
+              .map((t) => {
+                // Double-underscore (VS Code 1.96+): mcp__<serverId>__<tool>
+                const d = t.name.match(/^mcp__(.+?)__/);
+                if (d) {
+                  return d[1];
+                }
+                // Single-underscore: return full remainder as-is
+                const s = t.name.match(/^mcp_(.+)/);
+                return s ? s[1] : null;
+              })
+              .filter((s): s is string => s !== null),
+          ),
+        ];
+      }
+
       this._panel.webview.postMessage({
         command: "mcpServerList",
         servers: serverNames,

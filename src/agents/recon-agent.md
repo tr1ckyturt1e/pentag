@@ -282,6 +282,8 @@ Action: sitemap_annotate(url="https://target.example.com/upload", notes="File up
 > **You have `http_request`. ALWAYS call it yourself. Never ask the operator to run curl, navigate a browser, or test anything manually.**
 >
 > Output `HUMAN_INPUT_REQUIRED:` ONLY when you need something that cannot be obtained by making an HTTP request (e.g. a valid authenticated session cookie, scope clarification).
+>
+> **NEVER output `HUMAN_INPUT_REQUIRED: None`, `HUMAN_INPUT_REQUIRED: N/A`, or any other negative value.** If you do not need input, simply continue with your next Thought/Action.
 
 ---
 

@@ -419,17 +419,25 @@ export function getHtml(): string {
           </div>
 
           <div class="subagent-row-wrap">
-            <div class="agent-status-row subagent-row" id="status-auth-agent">
+            <div class="agent-status-row subagent-row" id="status-login-agent">
               <span class="status-dot" data-status="not-started"></span>
-              <span class="agent-status-name">Auth Agent</span>
+              <span class="agent-status-name">Login Agent</span>
               <span class="status-badge" data-status="not-started">Not Started</span>
             </div>
           </div>
 
           <div class="subagent-row-wrap">
-            <div class="agent-status-row subagent-row" id="status-exploit-agent">
+            <div class="agent-status-row subagent-row" id="status-crawl-agent">
               <span class="status-dot" data-status="not-started"></span>
-              <span class="agent-status-name">Exploit Agent</span>
+              <span class="agent-status-name">Crawl Agent</span>
+              <span class="status-badge" data-status="not-started">Not Started</span>
+            </div>
+          </div>
+
+          <div class="subagent-row-wrap">
+            <div class="agent-status-row subagent-row" id="status-audit-agent">
+              <span class="status-dot" data-status="not-started"></span>
+              <span class="agent-status-name">Audit Agent</span>
               <span class="status-badge" data-status="not-started">Not Started</span>
             </div>
           </div>

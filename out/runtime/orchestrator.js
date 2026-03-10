@@ -78,6 +78,8 @@ const OWN_TOOL_NAMES = new Set([
     "sitemap_read",
     "sitemap_summary",
     "sitemap_annotate",
+    "session_export",
+    "session_set_token",
 ]);
 // -- Parsers -----------------------------------------------------------------
 function parseDelegate(text) {
@@ -92,9 +94,20 @@ function parseDone(text) {
     const m = text.match(/^DONE:\s*(.+)/ms);
     return m ? m[1].trim() : null;
 }
+// Negative patterns the LLM may emit to mean "I don't need operator input".
+// If the HUMAN_INPUT_REQUIRED value matches any of these, treat it as absent.
+const HITL_NEGATIVE_RE = /^(none|n\/?a|no|not required|not needed|nothing|no input needed|no additional information)\s*\.?$/i;
 function parseHitlQuestion(text) {
     const m = text.match(/^HUMAN_INPUT_REQUIRED:\s*(.+)/m);
-    return m ? m[1].trim() : null;
+    if (!m) {
+        return null;
+    }
+    const question = m[1].trim();
+    // Reject empty strings or LLM-generated negatives like "None", "N/A", "No"
+    if (!question || HITL_NEGATIVE_RE.test(question)) {
+        return null;
+    }
+    return question;
 }
 function parseTentativeIssues(text) {
     const results = [];
